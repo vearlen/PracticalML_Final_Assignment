@@ -1,0 +1,151 @@
+---
+title: "Final Assignment Practical Machine Learning"
+author: "Ilya Tishchenko"
+date: "11/1/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+library(tidyverse)
+library(caret)
+library(randomForest)
+```
+
+### Assignment
+The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.
+
+### Load data
+
+Import data from URLs and check dimensions
+
+```{r import data}
+train <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",
+                  na.strings  =c("NA","#DIV/0!", ""))
+test <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",
+                 na.strings  =c("NA","#DIV/0!", ""))
+dim(train)
+# str(train,list.len = 160)
+```
+
+### Removing NA's
+
+As there are quite a few columns with NA's we remove the variables which has more than 70% of NA values, so they don't affect the training models.
+
+```{r "NA's", message=FALSE, warning=FALSE}
+#calculate number of NA's in each column and filter where it's higher than 70%
+ColLeft<- tibble(Name=names(train),sumNAs= colSums(is.na(train))) %>%
+  mutate(ratio=sumNAs/nrow(train))%>%
+  filter(ratio<0.7) 
+#generate list for selection of columns
+list <- dput(as.character(ColLeft$Name))
+#create filtered train dataset without columns where NA's more than 70%
+train.flt <- train  %>%
+  select(list)
+dim(train.flt)
+```
+Thus we reduced input variables from 160 to 60.
+
+### Exploratory Data Analysis
+
+Here is a quick look on how our target data is balanced. 
+
+```{r EDA, warning=FALSE, message=FALSE}
+trainClasseFreq <- train.flt %>%
+  group_by(classe)%>%
+  summarize(count=n())
+
+trainClasseFreq
+
+ggplot(trainClasseFreq)+
+  geom_col(aes(x=classe,y=count))
+```
+We could see that class A has the slight majority of cases but overall other classes are also represented, therefore we could do a training.
+
+### Cleaning data
+
+One more attempt to do final cleaning of the data. First we calculate near zero variance variables, appears only one and then remove the variables which shouldn't be included in prediction (i.e. index, timestamp, user_name). 
+From *near zero variance* only one parameter pops up: "new_window".
+
+```{r cleaning columns}
+NZVal <- nearZeroVar(train.flt, saveMetrics = TRUE)
+NZVal%>% filter(nzv == TRUE)
+
+#one variable comes out of this - new_window
+#in addition we remove index - X, user-name, timestamps, num_window
+train.flt.clean <- train.flt %>%
+  select(-c('X','user_name','raw_timestamp_part_1','raw_timestamp_part_2','new_window','num_window',
+            'cvtd_timestamp'))
+
+#convert classe to factor
+train.flt.clean$classe <- factor(train.flt.clean$classe)
+```
+
+### Prepare data for training and run training models
+
+Here we split the data (70/30 %) for training and validation dataset.
+
+```{r "prepare data for train and test"}
+#prepare data for training
+set.seed(123)
+index <- createDataPartition(train.flt.clean$classe, p=0.7,list=FALSE)
+train.model <- train.flt.clean[index,]
+valid.model <- train.flt.clean[-index,]
+```
+
+Here we run three models: 
+
+* Linear discriminant analysis
+* Quadrant discriminant analysis
+* Random Forest
+
+and compare their inaccuracies.
+
+```{r "run-models", eval=FALSE, cache = TRUE}
+#train models
+lda <- train(classe ~., data=train.model,method ="lda")
+qda <- train(classe ~., data=train.model,method ="qda")
+rf <- randomForest(classe ~. , data=train.model,importance=TRUE,
+                        proximity=TRUE)
+
+```
+
+```{r "load models", echo=FALSE}
+lda <- readRDS('/Users/ilyatishchenko/Documents/DataQuestions/Coursera_PracML/lda')
+qda <- readRDS('/Users/ilyatishchenko/Documents/DataQuestions/Coursera_PracML/qda')
+rf <- readRDS('/Users/ilyatishchenko/Documents/DataQuestions/Coursera_PracML/rf')
+```
+
+
+```{r "accuracy"}
+#prediction on validation set
+pred.lda <- predict(lda,valid.model)
+ac.lda <- confusionMatrix(factor(valid.model$classe),pred.lda)$overall[1]
+
+pred.qda <- predict(qda,valid.model)
+ac.qda <- confusionMatrix(factor(valid.model$classe),pred.qda)$overall[1]
+ 
+pred.rf <- predict(rf,valid.model)
+ac.rf <- confusionMatrix(factor(valid.model$classe),pred.rf)$overall[1]
+acc <- round(c(ac.lda,ac.qda,ac.rf),3)
+oose <- sapply(acc,function(x){round(1-x,3)})
+tibble(Method = c("Linear DA","Quadratic DA","Random Forest"), 
+       Accuracy = acc,
+       'Out of sampe error'=oose)
+```
+
+Random Forest shows the highest accuracy and therefore suggested for final selection.
+
+Here is for curious reader the full confusion matrix from Random Forest method:
+```{r}
+confusionMatrix(factor(valid.model$classe),pred.rf)
+```
+
+
+#### Predicton of test data
+
+Selected method applied to test data:
+
+```{r "prediction on test data"}
+predict(rf,test[,-length(names(test))])
+```
